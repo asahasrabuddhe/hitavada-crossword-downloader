@@ -1,11 +1,25 @@
 use anyhow::{Context, Result};
-use chrono::Local;
+use chrono::{Local, NaiveDate};
+use clap::Parser;
 use reqwest::{
     blocking::Client,
     header::{HeaderMap, HeaderValue},
 };
 use scraper::{Html, Selector};
 use std::fs;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Date in YYYY-MM-DD format (defaults to today)
+    #[arg(short, long, value_parser = parse_date)]
+    date: Option<NaiveDate>,
+}
+
+fn parse_date(s: &str) -> Result<NaiveDate, String> {
+    NaiveDate::parse_from_str(s, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid date format. Please use YYYY-MM-DD: {}", e))
+}
 
 fn create_headers() -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
@@ -27,9 +41,13 @@ fn create_headers() -> Result<HeaderMap> {
 }
 
 fn main() -> Result<()> {
-    // Get today's date in yyyy-mm-dd format
-    let today = Local::now().format("%Y-%m-%d").to_string();
-    let today_str = today.as_str();
+    // Parse command line arguments
+    let args = Args::parse();
+    
+    // Get the date (either from command line or today)
+    let date = args.date.unwrap_or_else(|| Local::now().date_naive());
+    let date_str = date.format("%Y-%m-%d").to_string();
+    let date_str_slice = date_str.as_str();
     
     // Create a client with a user agent to mimic a browser
     let client = Client::builder()
@@ -43,10 +61,10 @@ fn main() -> Result<()> {
     let mapping_url = "https://www.ehitavada.com/val.php";
     let mapping_data = format!(
         "get_mapping_coords=https%3A%2F%2Fehitavada.com%2Fencyc%2F6%2F{}{}{}%2FMpage_2.jpg&get_mapping_coords_date={}&get_mapping_coords_prefix=Mpage&get_mapping_coords_page=2",
-        &today_str[0..4], // year
-        &today_str[5..7], // month
-        &today_str[8..10], // day
-        today
+        &date_str_slice[0..4], // year
+        &date_str_slice[5..7], // month
+        &date_str_slice[8..10], // day
+        date_str
     );
 
     // Get the mapping coordinates
@@ -109,7 +127,7 @@ fn main() -> Result<()> {
 
     // Save the image
     let img_data = img_response.bytes()?;
-    let filename = format!("crossword_{}.jpg", today);
+    let filename = format!("crossword_{}.jpg", date_str);
     fs::write(&filename, img_data)?;
     println!("Image saved as: {}", filename);
 
