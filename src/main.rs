@@ -84,10 +84,10 @@ fn main() -> Result<()> {
     let areas: Vec<_> = mapping_document.select(&area_selector).collect();
     println!("Found {} area elements", areas.len());
 
-    // Get the href from the third area element
-    let third_area = areas.get(2)
-        .context("Could not find third area element")?;
-    let href = third_area.value().attr("href")
+    // Get the href from the second-to-last area element
+    let second_last_area = areas.get(areas.len() - 2)
+        .context("Could not find second-to-last area element")?;
+    let href = second_last_area.value().attr("href")
         .context("Could not find href attribute")?;
 
     // Construct the full URL for the crossword page
