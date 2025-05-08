@@ -1,0 +1,39 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: Hitavada Crossword Downloader Lambda Function
+
+Parameters:
+  GoogleDriveFolderId:
+    Type: String
+    Description: Google Drive folder ID where crosswords will be uploaded
+
+Resources:
+  CrosswordDownloaderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: target/lambda/hitavada-crossword-downloader/
+      Handler: bootstrap
+      Runtime: provided.al2
+      Architectures:
+        - x86_64
+      MemorySize: 256
+      Timeout: 30
+      Environment:
+        Variables:
+          GOOGLE_DRIVE_FOLDER_ID: 
+            Ref: GoogleDriveFolderId
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: 
+                Fn::Sub: 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:google-service-account-*'
+      Events:
+        DailySchedule:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 day)
+            Description: Trigger crossword download daily
+            Enabled: true 
