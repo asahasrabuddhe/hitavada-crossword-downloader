@@ -1,12 +1,27 @@
 use anyhow::{Context, Result};
 use chrono::{Local, NaiveDate};
 use clap::Parser;
+use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use reqwest::{
-    blocking::Client,
     header::{HeaderMap, HeaderValue},
 };
 use scraper::{Html, Selector};
+use serde::{Deserialize, Serialize};
 use std::fs;
+use std::env;
+use aws_sdk_secretsmanager::Client as SecretsClient;
+use aws_config::BehaviorVersion;
+
+#[derive(Serialize, Deserialize)]
+struct LambdaInput {
+    date: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct LambdaOutput {
+    message: String,
+    filename: String,
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -19,6 +34,32 @@ struct Args {
 fn parse_date(s: &str) -> Result<NaiveDate, String> {
     NaiveDate::parse_from_str(s, "%Y-%m-%d")
         .map_err(|e| format!("Invalid date format. Please use YYYY-MM-DD: {}", e))
+}
+
+async fn get_google_credentials() -> Result<String> {
+    // In local development, read from file
+    if let Ok(path) = env::var("GOOGLE_SERVICE_ACCOUNT_PATH") {
+        return fs::read_to_string(path)
+            .context("Failed to read Google service account file");
+    }
+
+    // In Lambda, get from Secrets Manager
+    let config = aws_config::defaults(BehaviorVersion::latest())
+        .load()
+        .await;
+    
+    let client = SecretsClient::new(&config);
+    
+    let secret_value = client
+        .get_secret_value()
+        .secret_id("google-service-account")
+        .send()
+        .await?;
+    
+    let secret_string = secret_value.secret_string()
+        .context("Secret string is empty")?;
+    
+    Ok(secret_string.to_string())
 }
 
 fn create_headers() -> Result<HeaderMap> {
@@ -40,17 +81,17 @@ fn create_headers() -> Result<HeaderMap> {
     Ok(headers)
 }
 
-fn main() -> Result<()> {
-    // Parse command line arguments
-    let args = Args::parse();
+async fn download_crossword(date: NaiveDate) -> Result<String> {
+    // Get Google credentials
+    let _google_credentials = get_google_credentials().await?;
+    let _drive_folder_id = env::var("GOOGLE_DRIVE_FOLDER_ID")
+        .context("GOOGLE_DRIVE_FOLDER_ID environment variable not set")?;
     
-    // Get the date (either from command line or today)
-    let date = args.date.unwrap_or_else(|| Local::now().date_naive());
     let date_str = date.format("%Y-%m-%d").to_string();
     let date_str_slice = date_str.as_str();
     
     // Create a client with a user agent to mimic a browser
-    let client = Client::builder()
+    let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36")
         .build()?;
 
@@ -72,10 +113,11 @@ fn main() -> Result<()> {
         .post(mapping_url)
         .headers(headers.clone())
         .body(mapping_data)
-        .send()?;
+        .send()
+        .await?;
     println!("Mapping response status: {}", mapping_response.status());
 
-    let mapping_html = mapping_response.text()?;
+    let mapping_html = mapping_response.text().await?;
     println!("Mapping HTML content length: {} bytes", mapping_html.len());
 
     // Parse the mapping HTML
@@ -98,10 +140,11 @@ fn main() -> Result<()> {
     let crossword_response = client
         .get(&crossword_url)
         .headers(headers.clone())
-        .send()?;
+        .send()
+        .await?;
     println!("Crossword page status: {}", crossword_response.status());
 
-    let crossword_html = crossword_response.text()?;
+    let crossword_html = crossword_response.text().await?;
     println!("Crossword HTML content length: {} bytes", crossword_html.len());
 
     // Parse the crossword page
@@ -122,14 +165,47 @@ fn main() -> Result<()> {
     let img_response = client
         .get(&img_url)
         .headers(headers)
-        .send()?;
+        .send()
+        .await?;
     println!("Image download status: {}", img_response.status());
 
     // Save the image
-    let img_data = img_response.bytes()?;
-    let filename = format!("crossword_{}.jpg", date_str);
+    let img_data = img_response.bytes().await?;
+    let filename = format!("/tmp/crossword_{}.jpg", date_str);
     fs::write(&filename, img_data)?;
     println!("Image saved as: {}", filename);
 
-    Ok(())
+    // TODO: Upload to Google Drive using the credentials
+    // This part will be implemented when you're ready to handle the Google Drive upload
+
+    Ok(filename)
+}
+
+async fn handler(event: LambdaEvent<LambdaInput>) -> Result<LambdaOutput, Error> {
+    let date = match event.payload.date {
+        Some(date_str) => NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
+            .map_err(|e| anyhow::anyhow!("Invalid date format: {}", e))?,
+        None => Local::now().date_naive(),
+    };
+
+    let filename = download_crossword(date).await?;
+    
+    Ok(LambdaOutput {
+        message: "Crossword downloaded successfully".to_string(),
+        filename,
+    })
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    // Load environment variables from .env file
+    dotenv::dotenv().ok();
+    
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_target(false)
+        .without_time()
+        .init();
+
+    run(service_fn(handler)).await
 }

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-reqwest = { version = "0.11", features = ["blocking", "cookies"] }
+reqwest = { version = "0.11", features = ["cookies"] }
 tokio = { version = "1.36", features = ["full"] }
 scraper = "0.18"
 chrono = "0.4"
@@ -12,3 +12,10 @@ anyhow = "1.0"
 toml = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 clap = { version = "4.5", features = ["derive"] }
+lambda_runtime = "0.8"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+dotenv = "0.15"
+aws-config = "1.1"
+aws-sdk-secretsmanager = "1.1"
+openssl = { version = "0.10", features = ["vendored"] }
