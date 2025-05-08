@@ -1,2 +1,14 @@
+# Environment variables
+.env
+
+# Google credentials
+credentials.json
+token_cache.json
+
+# Rust build artifacts
+/target/
+**/*.rs.bk
+Cargo.lock
+
 /target
 /crossword_*.jpg
