@@ -162,23 +162,35 @@ fn parse_coords(coords_str: &str) -> Option<Rect> {
     }
 }
 
-/// Checks if a given `target` rect exists in the `html` content with a tolerance of 50
-fn contains_target_rect(html: &str) -> bool {
+/// Gets the target area's href from the HTML content with a tolerance of 50 for y1 and y2, and 10 for x2
+fn get_target_rect(html: &str) -> Option<String> {
     let document = Html::parse_document(html);
     let area_selector = Selector::parse("area").unwrap();
-    let tolerance = 50;
+    let tolerance_y1 = 50;
+    let tolerance_x2 = 10;
+    let tolerance_y2 = 50;
 
-    for area in document.select(&area_selector) {
-        if let Some(coords) = area.value().attr("coords") {
-            if let Some(rect) = parse_coords(coords) {
-                if (rect.x1 == 0) && (rect.y1 - 1625).abs() <= tolerance {
-                    return true;
+    document.select(&area_selector)
+        .find_map(|area| {
+            if let Some(coords) = area.value().attr("coords") {
+                if let Some(rect) = parse_coords(coords) {
+                    // Check if coordinates are within tolerance
+                    let y1_in_range = (rect.y1 - 1625).abs() <= tolerance_y1;
+                    let x2_in_range = (rect.x2 - 1000).abs() <= tolerance_x2;
+                    let y2_in_range = (rect.y2 - 2775).abs() <= tolerance_y2;
+                    
+                    if rect.x1 == 0 && y1_in_range && x2_in_range && y2_in_range {
+                        area.value().attr("href").map(String::from)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
                 }
+            } else {
+                None
             }
-        }
-    }
-
-    false
+        })
 }
 
 async fn download_crossword(date: NaiveDate) -> Result<String> {
@@ -193,7 +205,7 @@ async fn download_crossword(date: NaiveDate) -> Result<String> {
     // Create headers
     let headers = create_headers()?;
 
-    // Try pages 1 through 5
+    // Try pages 1 through 20
     for page in 1..=20 {
         // Construct the mapping coordinates request
         let mapping_url = "https://www.ehitavada.com/val.php";
@@ -219,82 +231,62 @@ async fn download_crossword(date: NaiveDate) -> Result<String> {
         let mapping_html = mapping_response.text().await?;
         println!("Mapping HTML content length for page {}: {} bytes", page, mapping_html.len());
 
-        // Check if the target area exists in this page
-        if !contains_target_rect(&mapping_html) {
-            println!("Target area not found on page {}, trying next page...", page);
-            continue;
+        // Get the target area's href
+        if let Some(href) = get_target_rect(&mapping_html) {
+            // Construct the full URL for the crossword page
+            let crossword_url = format!("https://www.ehitavada.com/{}", href);
+            println!("Crossword URL: {}", crossword_url);
+
+            // Download the crossword page
+            let crossword_response = client
+                .get(&crossword_url)
+                .headers(headers.clone())
+                .send()
+                .await?;
+            println!("Crossword page status: {}", crossword_response.status());
+
+            let crossword_html = crossword_response.text().await?;
+            println!("Crossword HTML content length: {} bytes", crossword_html.len());
+
+            // Parse the crossword page
+            let crossword_document = Html::parse_document(&crossword_html);
+            
+            // Find the image URL
+            let img_selector = Selector::parse(".slices_container img").unwrap();
+            let img = crossword_document.select(&img_selector).next()
+                .context("Could not find crossword image")?;
+            
+            let img_src = img.value().attr("src")
+                .context("Could not find image source")?;
+            
+            let img_url = format!("https://www.ehitavada.com/{}", img_src);
+            println!("Image URL: {}", img_url);
+
+            // Download the image
+            let img_response = client
+                .get(&img_url)
+                .headers(headers)
+                .send()
+                .await?;
+            println!("Image download status: {}", img_response.status());
+
+            // Save the image
+            let img_data = img_response.bytes().await?;
+            let filename = format!("/tmp/crossword_{}.jpg", date_str);
+            fs::write(&filename, img_data)?;
+            println!("Image saved as: {}", filename);
+
+            // Get Google credentials
+            let google_credentials = get_google_credentials().await?;
+
+            // Upload to Google Drive
+            let file_id = upload_to_drive(&filename, &google_credentials).await?;
+            println!("File uploaded to Google Drive with ID: {}", file_id);
+
+            return Ok(filename);
         }
 
-        // Parse the mapping HTML
-        let mapping_document = Html::parse_document(&mapping_html);
-        let area_selector = Selector::parse("area").unwrap();
-        let areas: Vec<_> = mapping_document.select(&area_selector).collect();
-        println!("Found {} area elements on page {}", areas.len(), page);
-
-        // Find the area with the target coordinates
-        let target_area = areas.iter().find(|area| {
-            if let Some(coords) = area.value().attr("coords") {
-                let rect = parse_coords(coords);
-                rect.map(|r| r.x1 == 0 && (r.y1 - 1625).abs() <= 50).unwrap_or(false)
-            } else {
-                false
-            }
-        }).context("Could not find target area")?;
-
-        let href = target_area.value().attr("href")
-            .context("Could not find href attribute")?;
-
-        // Construct the full URL for the crossword page
-        let crossword_url = format!("https://www.ehitavada.com/{}", href);
-        println!("Crossword URL: {}", crossword_url);
-
-        // Download the crossword page
-        let crossword_response = client
-            .get(&crossword_url)
-            .headers(headers.clone())
-            .send()
-            .await?;
-        println!("Crossword page status: {}", crossword_response.status());
-
-        let crossword_html = crossword_response.text().await?;
-        println!("Crossword HTML content length: {} bytes", crossword_html.len());
-
-        // Parse the crossword page
-        let crossword_document = Html::parse_document(&crossword_html);
-        
-        // Find the image URL
-        let img_selector = Selector::parse(".slices_container img").unwrap();
-        let img = crossword_document.select(&img_selector).next()
-            .context("Could not find crossword image")?;
-        
-        let img_src = img.value().attr("src")
-            .context("Could not find image source")?;
-        
-        let img_url = format!("https://www.ehitavada.com/{}", img_src);
-        println!("Image URL: {}", img_url);
-
-        // Download the image
-        let img_response = client
-            .get(&img_url)
-            .headers(headers)
-            .send()
-            .await?;
-        println!("Image download status: {}", img_response.status());
-
-        // Save the image
-        let img_data = img_response.bytes().await?;
-        let filename = format!("/tmp/crossword_{}.jpg", date_str);
-        fs::write(&filename, img_data)?;
-        println!("Image saved as: {}", filename);
-
-        // Get Google credentials
-        let google_credentials = get_google_credentials().await?;
-
-        // Upload to Google Drive
-        let file_id = upload_to_drive(&filename, &google_credentials).await?;
-        println!("File uploaded to Google Drive with ID: {}", file_id);
-
-        return Ok(filename);
+        println!("Target area not found on page {}, trying next page...", page);
     }
 
     Err(anyhow::anyhow!("Could not find crossword on any page"))
@@ -327,4 +319,87 @@ async fn main() -> Result<(), Error> {
         .init();
 
     run(service_fn(handler)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_target_rect_exact_match() {
+        let html = r#"
+            <map>
+                <area shape="rect" coords="0,1625,1000,2775" href="test1"/>
+            </map>
+        "#;
+        assert_eq!(get_target_rect(html), Some("test1".to_string()));
+    }
+
+    #[test]
+    fn test_get_target_rect_within_tolerance() {
+        let html = r#"
+            <map>
+                <area shape="rect" coords="0,1670,1001,2764" href="test2"/>
+            </map>
+        "#;
+        assert_eq!(get_target_rect(html), Some("test2".to_string()));
+    }
+
+    #[test]
+    fn test_get_target_rect_outside_tolerance() {
+        let html = r#"
+            <map>
+                <area shape="rect" coords="0,1627,242,2286" href="test3"/>
+            </map>
+        "#;
+        assert_eq!(get_target_rect(html), None);
+    }
+
+    #[test]
+    fn test_get_target_rect_wrong_x1() {
+        let html = r#"
+            <map>
+                <area shape="rect" coords="10,1625,1000,2775" href="test4"/>
+            </map>
+        "#;
+        assert_eq!(get_target_rect(html), None);
+    }
+
+    #[test]
+    fn test_get_target_rect_multiple_areas() {
+        let html = r#"
+            <map>
+                <area shape="rect" coords="0,100,500,1000" href="test5"/>
+                <area shape="rect" coords="0,1670,1001,2764" href="test6"/>
+                <area shape="rect" coords="0,2000,500,3000" href="test7"/>
+            </map>
+        "#;
+        assert_eq!(get_target_rect(html), Some("test6".to_string()));
+    }
+
+    #[test]
+    fn test_get_target_rect_invalid_coords() {
+        let html = r#"
+            <map>
+                <area shape="rect" coords="invalid" href="test8"/>
+                <area shape="rect" coords="0,1625,1000" href="test9"/>
+            </map>
+        "#;
+        assert_eq!(get_target_rect(html), None);
+    }
+
+    #[test]
+    fn test_get_target_rect_empty_html() {
+        let html = "";
+        assert_eq!(get_target_rect(html), None);
+    }
+
+    #[test]
+    fn test_get_target_rect_no_areas() {
+        let html = r#"
+            <map>
+            </map>
+        "#;
+        assert_eq!(get_target_rect(html), None);
+    }
 }
