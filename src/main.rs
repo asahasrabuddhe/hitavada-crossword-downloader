@@ -36,6 +36,14 @@ struct Args {
     date: Option<NaiveDate>,
 }
 
+#[derive(Debug, PartialEq)]
+struct Rect {
+    x1: i32,
+    y1: i32,
+    x2: i32,
+    y2: i32,
+}
+
 fn parse_date(s: &str) -> Result<NaiveDate, String> {
     NaiveDate::parse_from_str(s, "%Y-%m-%d")
         .map_err(|e| format!("Invalid date format. Please use YYYY-MM-DD: {}", e))
@@ -135,6 +143,44 @@ async fn upload_to_drive(filename: &str, credentials: &str) -> Result<String> {
     Ok(file.id.unwrap_or_default())
 }
 
+/// Parses a single coords string into a Rect
+fn parse_coords(coords_str: &str) -> Option<Rect> {
+    let parts: Vec<i32> = coords_str
+        .split(',')
+        .filter_map(|s| s.trim().parse::<i32>().ok())
+        .collect();
+
+    if parts.len() == 4 {
+        Some(Rect {
+            x1: parts[0],
+            y1: parts[1],
+            x2: parts[2],
+            y2: parts[3],
+        })
+    } else {
+        None
+    }
+}
+
+/// Checks if a given `target` rect exists in the `html` content with a tolerance of 50
+fn contains_target_rect(html: &str) -> bool {
+    let document = Html::parse_document(html);
+    let area_selector = Selector::parse("area").unwrap();
+    let tolerance = 50;
+
+    for area in document.select(&area_selector) {
+        if let Some(coords) = area.value().attr("coords") {
+            if let Some(rect) = parse_coords(coords) {
+                if (rect.x1 == 0) && (rect.y1 - 1625).abs() <= tolerance {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
 async fn download_crossword(date: NaiveDate) -> Result<String> {
     let date_str = date.format("%Y-%m-%d").to_string();
     let date_str_slice = date_str.as_str();
@@ -147,91 +193,111 @@ async fn download_crossword(date: NaiveDate) -> Result<String> {
     // Create headers
     let headers = create_headers()?;
 
-    // Construct the mapping coordinates request
-    let mapping_url = "https://www.ehitavada.com/val.php";
-    let mapping_data = format!(
-        "get_mapping_coords=https%3A%2F%2Fehitavada.com%2Fencyc%2F6%2F{}{}{}%2FMpage_2.jpg&get_mapping_coords_date={}&get_mapping_coords_prefix=Mpage&get_mapping_coords_page=2",
-        &date_str_slice[0..4], // year
-        &date_str_slice[5..7], // month
-        &date_str_slice[8..10], // day
-        date_str
-    );
+    // Try pages 1 through 5
+    for page in 1..=20 {
+        // Construct the mapping coordinates request
+        let mapping_url = "https://www.ehitavada.com/val.php";
+        let mapping_data = format!(
+            "get_mapping_coords=https%3A%2F%2Fehitavada.com%2Fencyc%2F6%2F{}{}{}%2FMpage_{}.jpg&get_mapping_coords_date={}&get_mapping_coords_prefix=Mpage&get_mapping_coords_page={}",
+            &date_str_slice[0..4], // year
+            &date_str_slice[5..7], // month
+            &date_str_slice[8..10], // day
+            page,
+            date_str,
+            page
+        );
 
-    // Get the mapping coordinates
-    let mapping_response = client
-        .post(mapping_url)
-        .headers(headers.clone())
-        .body(mapping_data)
-        .send()
-        .await?;
-    println!("Mapping response status: {}", mapping_response.status());
+        // Get the mapping coordinates
+        let mapping_response = client
+            .post(mapping_url)
+            .headers(headers.clone())
+            .body(mapping_data)
+            .send()
+            .await?;
+        println!("Mapping response status for page {}: {}", page, mapping_response.status());
 
-    let mapping_html = mapping_response.text().await?;
-    println!("Mapping HTML content length: {} bytes", mapping_html.len());
+        let mapping_html = mapping_response.text().await?;
+        println!("Mapping HTML content length for page {}: {} bytes", page, mapping_html.len());
 
-    // Parse the mapping HTML
-    let mapping_document = Html::parse_document(&mapping_html);
-    let area_selector = Selector::parse("area").unwrap();
-    let areas: Vec<_> = mapping_document.select(&area_selector).collect();
-    println!("Found {} area elements", areas.len());
+        // Check if the target area exists in this page
+        if !contains_target_rect(&mapping_html) {
+            println!("Target area not found on page {}, trying next page...", page);
+            continue;
+        }
 
-    // Get the href from the second-to-last area element
-    let second_last_area = areas.get(areas.len() - 1)
-        .context("Could not find second-to-last area element")?;
-    let href = second_last_area.value().attr("href")
-        .context("Could not find href attribute")?;
+        // Parse the mapping HTML
+        let mapping_document = Html::parse_document(&mapping_html);
+        let area_selector = Selector::parse("area").unwrap();
+        let areas: Vec<_> = mapping_document.select(&area_selector).collect();
+        println!("Found {} area elements on page {}", areas.len(), page);
 
-    // Construct the full URL for the crossword page
-    let crossword_url = format!("https://www.ehitavada.com/{}", href);
-    println!("Crossword URL: {}", crossword_url);
+        // Find the area with the target coordinates
+        let target_area = areas.iter().find(|area| {
+            if let Some(coords) = area.value().attr("coords") {
+                let rect = parse_coords(coords);
+                rect.map(|r| r.x1 == 0 && (r.y1 - 1625).abs() <= 50).unwrap_or(false)
+            } else {
+                false
+            }
+        }).context("Could not find target area")?;
 
-    // Download the crossword page
-    let crossword_response = client
-        .get(&crossword_url)
-        .headers(headers.clone())
-        .send()
-        .await?;
-    println!("Crossword page status: {}", crossword_response.status());
+        let href = target_area.value().attr("href")
+            .context("Could not find href attribute")?;
 
-    let crossword_html = crossword_response.text().await?;
-    println!("Crossword HTML content length: {} bytes", crossword_html.len());
+        // Construct the full URL for the crossword page
+        let crossword_url = format!("https://www.ehitavada.com/{}", href);
+        println!("Crossword URL: {}", crossword_url);
 
-    // Parse the crossword page
-    let crossword_document = Html::parse_document(&crossword_html);
-    
-    // Find the image URL
-    let img_selector = Selector::parse(".slices_container img").unwrap();
-    let img = crossword_document.select(&img_selector).next()
-        .context("Could not find crossword image")?;
-    
-    let img_src = img.value().attr("src")
-        .context("Could not find image source")?;
-    
-    let img_url = format!("https://www.ehitavada.com/{}", img_src);
-    println!("Image URL: {}", img_url);
+        // Download the crossword page
+        let crossword_response = client
+            .get(&crossword_url)
+            .headers(headers.clone())
+            .send()
+            .await?;
+        println!("Crossword page status: {}", crossword_response.status());
 
-    // Download the image
-    let img_response = client
-        .get(&img_url)
-        .headers(headers)
-        .send()
-        .await?;
-    println!("Image download status: {}", img_response.status());
+        let crossword_html = crossword_response.text().await?;
+        println!("Crossword HTML content length: {} bytes", crossword_html.len());
 
-    // Save the image
-    let img_data = img_response.bytes().await?;
-    let filename = format!("/tmp/crossword_{}.jpg", date_str);
-    fs::write(&filename, img_data)?;
-    println!("Image saved as: {}", filename);
+        // Parse the crossword page
+        let crossword_document = Html::parse_document(&crossword_html);
+        
+        // Find the image URL
+        let img_selector = Selector::parse(".slices_container img").unwrap();
+        let img = crossword_document.select(&img_selector).next()
+            .context("Could not find crossword image")?;
+        
+        let img_src = img.value().attr("src")
+            .context("Could not find image source")?;
+        
+        let img_url = format!("https://www.ehitavada.com/{}", img_src);
+        println!("Image URL: {}", img_url);
 
-    // Get Google credentials
-    let google_credentials = get_google_credentials().await?;
+        // Download the image
+        let img_response = client
+            .get(&img_url)
+            .headers(headers)
+            .send()
+            .await?;
+        println!("Image download status: {}", img_response.status());
 
-    // Upload to Google Drive
-    let file_id = upload_to_drive(&filename, &google_credentials).await?;
-    println!("File uploaded to Google Drive with ID: {}", file_id);
+        // Save the image
+        let img_data = img_response.bytes().await?;
+        let filename = format!("/tmp/crossword_{}.jpg", date_str);
+        fs::write(&filename, img_data)?;
+        println!("Image saved as: {}", filename);
 
-    Ok(filename)
+        // Get Google credentials
+        let google_credentials = get_google_credentials().await?;
+
+        // Upload to Google Drive
+        let file_id = upload_to_drive(&filename, &google_credentials).await?;
+        println!("File uploaded to Google Drive with ID: {}", file_id);
+
+        return Ok(filename);
+    }
+
+    Err(anyhow::anyhow!("Could not find crossword on any page"))
 }
 
 async fn handler(event: LambdaEvent<LambdaInput>) -> Result<LambdaOutput, Error> {
