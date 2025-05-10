@@ -3,7 +3,7 @@ version = 0.1
 [default.deploy]
 [default.deploy.parameters]
 stack_name = "hitavada-crossword-downloader"
-s3_bucket = "hitavada-crossword-deployments"
+s3_bucket = "hitavada-crossword-sam-deployments"
 s3_prefix = "hitavada-crossword-downloader"
 region = "ap-south-1"
 confirm_changeset = true
