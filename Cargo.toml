@@ -19,3 +19,5 @@ dotenv = "0.15"
 aws-config = "1.1"
 aws-sdk-secretsmanager = "1.1"
 openssl = { version = "0.10", features = ["vendored"] }
+google-drive3 = "5.0"
+yup-oauth2 = "9.0"

@@ -11,6 +11,9 @@ use std::fs;
 use std::env;
 use aws_sdk_secretsmanager::Client as SecretsClient;
 use aws_config::BehaviorVersion;
+use google_drive3::DriveHub;
+use yup_oauth2::ServiceAccountAuthenticator;
+use std::path::Path;
 
 #[derive(Serialize, Deserialize)]
 struct LambdaInput {
@@ -81,12 +84,47 @@ fn create_headers() -> Result<HeaderMap> {
     Ok(headers)
 }
 
-async fn download_crossword(date: NaiveDate) -> Result<String> {
-    // Get Google credentials
-    let _google_credentials = get_google_credentials().await?;
-    let _drive_folder_id = env::var("GOOGLE_DRIVE_FOLDER_ID")
+async fn upload_to_drive(filename: &str, credentials: &str) -> Result<String> {
+    let folder_id = env::var("GOOGLE_DRIVE_FOLDER_ID")
         .context("GOOGLE_DRIVE_FOLDER_ID environment variable not set")?;
-    
+
+    // Create authenticator
+    let sa_key = serde_json::from_str(credentials)?;
+    let auth = ServiceAccountAuthenticator::builder(sa_key)
+        .build()
+        .await?;
+
+    // Create Drive client
+    let hub = DriveHub::new(
+        hyper::Client::builder().build(hyper_rustls::HttpsConnector::with_native_roots()),
+        auth,
+    );
+
+    // Read file
+    let file_content = fs::read(filename)?;
+    let file_name = Path::new(filename)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .context("Invalid filename")?;
+
+    // Create file metadata
+    let file = google_drive3::api::File {
+        name: Some(file_name.to_string()),
+        parents: Some(vec![folder_id]),
+        ..Default::default()
+    };
+
+    // Upload file
+    let (_, file) = hub
+        .files()
+        .create(file)
+        .upload(file_content, "image/jpeg".parse()?)
+        .await?;
+
+    Ok(file.id.unwrap_or_default())
+}
+
+async fn download_crossword(date: NaiveDate) -> Result<String> {
     let date_str = date.format("%Y-%m-%d").to_string();
     let date_str_slice = date_str.as_str();
     
@@ -175,8 +213,12 @@ async fn download_crossword(date: NaiveDate) -> Result<String> {
     fs::write(&filename, img_data)?;
     println!("Image saved as: {}", filename);
 
-    // TODO: Upload to Google Drive using the credentials
-    // This part will be implemented when you're ready to handle the Google Drive upload
+    // Get Google credentials
+    let google_credentials = get_google_credentials().await?;
+
+    // Upload to Google Drive
+    let file_id = upload_to_drive(&filename, &google_credentials).await?;
+    println!("File uploaded to Google Drive with ID: {}", file_id);
 
     Ok(filename)
 }
