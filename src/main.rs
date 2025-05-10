@@ -9,11 +9,13 @@ use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::env;
-use aws_sdk_secretsmanager::Client as SecretsClient;
+use aws_sdk_ssm::Client as SsmClient;
 use aws_config::BehaviorVersion;
 use google_drive3::DriveHub;
 use yup_oauth2::ServiceAccountAuthenticator;
 use std::path::Path;
+use std::io::Cursor;
+use hyper::Client;
 
 #[derive(Serialize, Deserialize)]
 struct LambdaInput {
@@ -46,23 +48,25 @@ async fn get_google_credentials() -> Result<String> {
             .context("Failed to read Google service account file");
     }
 
-    // In Lambda, get from Secrets Manager
+    // In Lambda, get from SSM Parameter Store
     let config = aws_config::defaults(BehaviorVersion::latest())
         .load()
         .await;
     
-    let client = SecretsClient::new(&config);
+    let client = SsmClient::new(&config);
     
-    let secret_value = client
-        .get_secret_value()
-        .secret_id("google-service-account")
+    let parameter = client
+        .get_parameter()
+        .name("/hitavada-crossword/google-service-account")
+        .with_decryption(true)
         .send()
         .await?;
     
-    let secret_string = secret_value.secret_string()
-        .context("Secret string is empty")?;
+    let value = parameter.parameter()
+        .and_then(|p| p.value())
+        .context("Parameter value is empty")?;
     
-    Ok(secret_string.to_string())
+    Ok(value.to_string())
 }
 
 fn create_headers() -> Result<HeaderMap> {
@@ -94,11 +98,17 @@ async fn upload_to_drive(filename: &str, credentials: &str) -> Result<String> {
         .build()
         .await?;
 
-    // Create Drive client
-    let hub = DriveHub::new(
-        hyper::Client::builder().build(hyper_rustls::HttpsConnector::with_native_roots()),
-        auth,
-    );
+    // Create Drive client with hyper
+    let https = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_native_roots()
+        .https_only()
+        .enable_http1()
+        .build();
+    
+    let client = Client::builder()
+        .build(https);
+
+    let hub = DriveHub::new(client, auth);
 
     // Read file
     let file_content = fs::read(filename)?;
@@ -114,11 +124,12 @@ async fn upload_to_drive(filename: &str, credentials: &str) -> Result<String> {
         ..Default::default()
     };
 
-    // Upload file
+    // Upload file using Cursor
+    let cursor = Cursor::new(file_content);
     let (_, file) = hub
         .files()
         .create(file)
-        .upload(file_content, "image/jpeg".parse()?)
+        .upload(cursor, "image/jpeg".parse()?)
         .await?;
 
     Ok(file.id.unwrap_or_default())

@@ -9,6 +9,14 @@ Parameters:
     Description: Google Drive folder ID where crosswords will be uploaded
 
 Resources:
+  GoogleServiceAccountParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /hitavada-crossword/google-service-account
+      Type: SecureString
+      Value: '{{resolve:ssm-secure:GoogleServiceAccountJson}}'
+      Description: Google Service Account credentials for crossword uploader
+
   CrosswordDownloaderFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -27,9 +35,9 @@ Resources:
         - Statement:
             - Effect: Allow
               Action:
-                - secretsmanager:GetSecretValue
+                - ssm:GetParameter
               Resource: 
-                Fn::Sub: 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:google-service-account-*'
+                Fn::Sub: 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/hitavada-crossword/google-service-account'
       Events:
         DailySchedule:
           Type: Schedule
