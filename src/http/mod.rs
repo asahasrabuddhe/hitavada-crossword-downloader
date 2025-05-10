@@ -20,4 +20,38 @@ pub fn create_headers() -> Result<HeaderMap> {
     headers.insert("user-agent", HeaderValue::from_static("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"));
     headers.insert("x-requested-with", HeaderValue::from_static("XMLHttpRequest"));
     Ok(headers)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_headers() {
+        let headers = create_headers().unwrap();
+        
+        // Test required headers are present
+        assert!(headers.contains_key("accept"));
+        assert!(headers.contains_key("accept-language"));
+        assert!(headers.contains_key("content-type"));
+        assert!(headers.contains_key("origin"));
+        assert!(headers.contains_key("user-agent"));
+        assert!(headers.contains_key("x-requested-with"));
+
+        // Test header values
+        assert_eq!(headers.get("accept").unwrap(), "*/*");
+        assert_eq!(headers.get("origin").unwrap(), "https://www.ehitavada.com");
+        assert_eq!(headers.get("content-type").unwrap(), "application/x-www-form-urlencoded; charset=UTF-8");
+    }
+
+    #[test]
+    fn test_headers_are_valid() {
+        let headers = create_headers().unwrap();
+        
+        // Test that all headers can be converted to strings
+        for (name, value) in headers.iter() {
+            assert!(!name.as_str().is_empty());
+            assert!(!value.to_str().unwrap().is_empty());
+        }
+    }
 } 
