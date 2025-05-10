@@ -1,22 +1,33 @@
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use std::fs;
-use reqwest::Client;
 use scraper::{Html, Selector};
 
 use crate::http;
 use crate::parser;
 use crate::drive;
 
-pub async fn download_crossword(date: NaiveDate) -> Result<String> {
+// Define a trait for HTTP client operations
+pub trait HttpClient {
+    fn post(&self, url: &str) -> reqwest::RequestBuilder;
+    fn get(&self, url: &str) -> reqwest::RequestBuilder;
+}
+
+// Implement the trait for the real client
+impl HttpClient for reqwest::Client {
+    fn post(&self, url: &str) -> reqwest::RequestBuilder {
+        self.post(url)
+    }
+
+    fn get(&self, url: &str) -> reqwest::RequestBuilder {
+        self.get(url)
+    }
+}
+
+pub async fn download_crossword<C: HttpClient>(client: &C, date: NaiveDate) -> Result<String> {
     let date_str = date.format("%Y-%m-%d").to_string();
     let date_str_slice = date_str.as_str();
     
-    // Create a client with a user agent to mimic a browser
-    let client = Client::builder()
-        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36")
-        .build()?;
-
     // Create headers
     let headers = http::create_headers()?;
 
@@ -112,36 +123,21 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::NamedTempFile;
-    use reqwest::RequestBuilder;
-
-    // Define a trait for HTTP client operations
-    trait HttpClient {
-        fn post(&self, url: &str) -> RequestBuilder;
-        fn get(&self, url: &str) -> RequestBuilder;
-    }
-
-    // Implement the trait for the real client
-    impl HttpClient for reqwest::Client {
-        fn post(&self, url: &str) -> RequestBuilder {
-            self.post(url)
-        }
-
-        fn get(&self, url: &str) -> RequestBuilder {
-            self.get(url)
-        }
-    }
+    use std::sync::Mutex;
 
     // Test implementation
     struct TestHttpClient {
         post_url: Option<String>,
-        get_url: Option<String>,
+        get_urls: Vec<String>,
+        current_get_index: Mutex<usize>,
     }
 
     impl TestHttpClient {
         fn new() -> Self {
             Self {
                 post_url: None,
-                get_url: None,
+                get_urls: Vec::new(),
+                current_get_index: Mutex::new(0),
             }
         }
 
@@ -149,19 +145,28 @@ mod tests {
             self.post_url = Some(url);
         }
 
-        fn set_get_url(&mut self, url: String) {
-            self.get_url = Some(url);
+        fn add_get_url(&mut self, url: String) {
+            self.get_urls.push(url);
         }
     }
 
     impl HttpClient for TestHttpClient {
-        fn post(&self, url: &str) -> RequestBuilder {
+        fn post(&self, url: &str) -> reqwest::RequestBuilder {
             assert_eq!(self.post_url.as_ref().unwrap(), url);
             reqwest::Client::new().post(url)
         }
 
-        fn get(&self, url: &str) -> RequestBuilder {
-            assert_eq!(self.get_url.as_ref().unwrap(), url);
+        fn get(&self, url: &str) -> reqwest::RequestBuilder {
+            let mut index = self.current_get_index.lock().unwrap();
+            if *index < self.get_urls.len() {
+                // For image URLs, we only check the base URL since the query parameter might change
+                if url.contains("not_found.png") {
+                    assert!(url.starts_with("https://www.ehitavada.com/images/not_found.png"));
+                } else {
+                    assert_eq!(self.get_urls[*index], url);
+                }
+                *index += 1;
+            }
             reqwest::Client::new().get(url)
         }
     }
@@ -174,21 +179,22 @@ mod tests {
         let image_file = NamedTempFile::new().unwrap();
 
         // Write test content
-        fs::write(&mapping_file, r#"<map><area shape="rect" coords="0,1625,1000,2775" href="test-crossword"/></map>"#).unwrap();
-        fs::write(&crossword_file, r#"<div class="slices_container"><img src="test-image.jpg"/></div>"#).unwrap();
+        fs::write(&mapping_file, r#"<map><area shape="rect" coords="0,1625,1000,2775" href="article.php?mid=Mpage_2024-03-20_e53c5d46e9cc0b0c53b4cb2cc2820b6d65fa28b571c5a&JSON"/></map>"#).unwrap();
+        fs::write(&crossword_file, r#"<div class="slices_container"><img src="images/not_found.png"/></div>"#).unwrap();
         fs::write(&image_file, "test image content").unwrap();
 
         // Create test client
         let mut test_client = TestHttpClient::new();
         test_client.set_post_url("https://www.ehitavada.com/val.php".to_string());
-        test_client.set_get_url("https://www.ehitavada.com/test-crossword".to_string());
+        test_client.add_get_url("https://www.ehitavada.com/article.php?mid=Mpage_2024-03-20_e53c5d46e9cc0b0c53b4cb2cc2820b6d65fa28b571c5a&JSON".to_string());
+        test_client.add_get_url("https://www.ehitavada.com/images/not_found.png".to_string());
 
         // Test date
         let date = NaiveDate::from_ymd_opt(2024, 3, 20).unwrap();
 
         // Note: This test will fail in practice because we can't easily mock the HTTP responses
         // In a real test environment, we would use a mock for the HTTP client and responses
-        let result = download_crossword(date).await;
+        let result = download_crossword(&test_client, date).await;
         assert!(result.is_err());
     }
 
@@ -207,7 +213,7 @@ mod tests {
 
         // Note: This test will fail in practice because we can't easily mock the HTTP responses
         // In a real test environment, we would use a mock for the HTTP client and responses
-        let result = download_crossword(date).await;
+        let result = download_crossword(&test_client, date).await;
         assert!(result.is_err());
     }
 } 

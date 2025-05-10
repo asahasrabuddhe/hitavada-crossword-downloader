@@ -2,6 +2,7 @@ use anyhow::Result;
 use chrono::{Local, NaiveDate};
 use clap::Parser;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
+use reqwest::Client;
 
 mod drive;
 mod http;
@@ -26,7 +27,12 @@ async fn handler(event: LambdaEvent<LambdaInput>) -> Result<LambdaOutput, Error>
         None => Local::now().date_naive(),
     };
 
-    let filename = crossword::download_crossword(date).await?;
+    // Create a client with a user agent to mimic a browser
+    let client = Client::builder()
+        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36")
+        .build()?;
+
+    let filename = crossword::download_crossword(&client, date).await?;
     
     Ok(LambdaOutput {
         message: "Crossword downloaded successfully".to_string(),
