@@ -176,7 +176,7 @@ async fn download_crossword(date: NaiveDate) -> Result<String> {
     println!("Found {} area elements", areas.len());
 
     // Get the href from the second-to-last area element
-    let second_last_area = areas.get(areas.len() - 2)
+    let second_last_area = areas.get(areas.len() - 1)
         .context("Could not find second-to-last area element")?;
     let href = second_last_area.value().attr("href")
         .context("Could not find href attribute")?;
