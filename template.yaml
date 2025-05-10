@@ -35,6 +35,6 @@ Resources:
         DailySchedule:
           Type: Schedule
           Properties:
-            Schedule: rate(1 day)
-            Description: Trigger crossword download daily
+            Schedule: cron(0 6 ? * 1,3-7 *)
+            Description: Trigger crossword download daily at 6am UTC (except Mondays)
             Enabled: true 
