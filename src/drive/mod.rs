@@ -142,7 +142,7 @@ mod tests {
         // Create a temporary file with test credentials
         let temp_file = NamedTempFile::new().unwrap();
         let test_credentials = r#"{"type": "service_account", "project_id": "test"}"#;
-        std::fs::write(&temp_file, test_credentials).unwrap();
+        fs::write(&temp_file, test_credentials).unwrap();
 
         // Set environment variable to point to our temp file
         env::set_var("GOOGLE_SERVICE_ACCOUNT_PATH", temp_file.path());
@@ -182,7 +182,7 @@ mod tests {
         // Create a temporary test file
         let temp_file = NamedTempFile::new().unwrap();
         let test_content = b"test image content";
-        std::fs::write(&temp_file, test_content).unwrap();
+        fs::write(&temp_file, test_content).unwrap();
 
         // Set required environment variable
         env::set_var("GOOGLE_DRIVE_FOLDER_ID", "test-folder-id");

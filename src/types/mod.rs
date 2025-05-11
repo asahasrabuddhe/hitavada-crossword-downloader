@@ -1,5 +1,4 @@
 use chrono::NaiveDate;
-use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -29,6 +28,7 @@ pub fn parse_date(s: &str) -> Result<NaiveDate, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Datelike;
 
     #[test]
     fn test_rect_creation() {
