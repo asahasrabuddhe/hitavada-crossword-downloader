@@ -24,6 +24,7 @@ pub fn parse_coords(coords_str: &str) -> Option<Rect> {
 pub fn get_target_rect(html: &str) -> Option<String> {
     let document = Html::parse_document(html);
     let area_selector = Selector::parse("area").unwrap();
+    let tolerance_x1 = 5;
     let tolerance_y1 = 50;
     let tolerance_x2 = 10;
     let tolerance_y2 = 50;
@@ -33,11 +34,12 @@ pub fn get_target_rect(html: &str) -> Option<String> {
             if let Some(coords) = area.value().attr("coords") {
                 if let Some(rect) = parse_coords(coords) {
                     // Check if coordinates are within tolerance
+                    let x1_in_range = (rect.x1 - 0).abs() <= tolerance_x1;
                     let y1_in_range = (rect.y1 - 1625).abs() <= tolerance_y1;
                     let x2_in_range = (rect.x2 - 1000).abs() <= tolerance_x2;
                     let y2_in_range = (rect.y2 - 2775).abs() <= tolerance_y2;
                     
-                    if rect.x1 == 0 && y1_in_range && x2_in_range && y2_in_range {
+                    if x1_in_range && y1_in_range && x2_in_range && y2_in_range {
                         area.value().attr("href").map(String::from)
                     } else {
                         None
@@ -116,6 +118,19 @@ mod tests {
             </map>
         "#;
         assert_eq!(get_target_rect(html), None);
+    }
+
+    #[test]
+    fn test_get_target_rect_multiple_areas_with_tolerance() {
+        let html = r#"
+            <map>
+                <area shape="rect" coords="0,89,1255,1683" href="test10">
+                <area shape="rect" coords="1249,97,1749,1655" href="test11">
+                <area shape="rect" coords="4,1672,997,2778" href="test12">
+                <area shape="rect" coords="995,1664,1749,2778" href="test13">
+            </map>
+        "#;
+        assert_eq!(get_target_rect(html), Some("test12".to_string()));
     }
 
     #[test]
