@@ -20,6 +20,6 @@ echo "Deploying with SAM..."
 sam deploy \
     --parameter-overrides \
     "GoogleDriveFolderId=$GOOGLE_DRIVE_FOLDER_ID" \
-    --profile personal
-
+    --profile personal \
+    --no-confirm-changeset
 echo "Deployment complete!" 
